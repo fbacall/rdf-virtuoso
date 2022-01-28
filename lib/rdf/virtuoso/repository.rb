@@ -1,4 +1,4 @@
-require 'api_smith'
+require 'httparty'
 require 'rdf'
 require 'uri'
 require 'timeout'
@@ -6,7 +6,7 @@ require 'timeout'
 module RDF
   module Virtuoso
     class Repository < ::RDF::Repository
-      include APISmith::Client
+      include HTTParty
 
       RESULT_JSON = 'application/sparql-results+json'.freeze
       RESULT_XML  = 'application/sparql-results+xml'.freeze
@@ -54,7 +54,7 @@ module RDF
           response = api_post *args
         end
       end
-      
+
       private
 
       def check_response_errors(response)
@@ -72,15 +72,7 @@ module RDF
         { 'Accept' => [RESULT_JSON, RESULT_XML].join(', ') }
       end
 
-      def base_query_options
-        { format: RESULT_JSON }
-      end
-
-      def base_request_options
-        { headers: headers }
-      end
-
-      def extra_request_options
+      def auth_options
         case @auth_method
         when 'basic'
           { basic_auth: auth }
@@ -96,32 +88,33 @@ module RDF
       def api_get(query, options = {})
         # prefer sparul endpoint with auth if present to allow SELECT/CONSTRUCT access to protected graphs
         if @sparul_endpoint
-          self.class.endpoint @sparul_endpoint
-          Timeout::timeout(@timeout) {
-            get '/', extra_query: { query: query }.merge(options),
-                     extra_request: extra_request_options,
-                     transform: RDF::Virtuoso::Parser::JSON
-          }
+          Timeout::timeout(@timeout) do
+            response = self.class.get(@sparul_endpoint,
+                                      headers: headers,
+                                      query: { query: query, format: RESULT_JSON }.merge(options),
+                                      **auth_options)
+            RDF::Virtuoso::Parser::JSON.call(response)
+          end
         else
-          self.class.endpoint @sparql_endpoint
-          Timeout::timeout(@timeout) {
-          puts self.inspect
-            get '/', extra_query: { query: query }.merge(options),
-                     transform: RDF::Virtuoso::Parser::JSON
-          }
+          Timeout::timeout(@timeout) do
+            response = self.class.get(@sparql_endpoint,
+                                      headers: headers,
+                                      query: { query: query, format: RESULT_JSON }.merge(options))
+            RDF::Virtuoso::Parser::JSON.call(response)
+          end
         end
       end
 
       def api_post(query, options = {})
-        self.class.endpoint @sparul_endpoint
-        Timeout::timeout(@timeout) {
-          post '/', extra_body: { query: query }.merge(options),
-                    extra_request: extra_request_options,
-                    response_container: [
-                      "results", "bindings", 0, "callret-0", "value"]
-        }
+        Timeout::timeout(@timeout) do
+          response = self.class.post(@sparul_endpoint,
+                                     headers: headers,
+                                     query: { format: RESULT_JSON },
+                                     body: { query: query }.merge(options),
+                                     **auth_options)
+          response.dig('results', 'bindings', 0, 'callret-0', 'value')
+        end
       end
-
     end
   end
 end
